@@ -1,4 +1,5 @@
 #pragma once
+#include "taskstore.h"
 
 class __declspec(dllexport) AsyncWorker
 {
@@ -6,21 +7,55 @@ public:
 	static AsyncWorker& instance();
 
 	template<typename FunctionType, typename CallbackType, typename... Args>
+	typename std::enable_if_t<std::is_invocable_v<FunctionType, Args&&...>>
+		execute(FunctionType&& function, Args&&... args);
+
+	template<typename FunctionType, typename CallbackType, typename... Args>
 	typename std::enable_if_t<
 		std::is_invocable_v<FunctionType, Args&&...> &&
 		(std::is_void_v<std::invoke_result_t<FunctionType, Args&&...>> && std::is_invocable_v<CallbackType>
 			|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args&&...>>)
 	>
-		execute(FunctionType&& function, CallbackType&& callback, Args&&... args);
+		executeWithCallback(FunctionType&& function, CallbackType&& callback, Args&&... args);
 
 	virtual ~AsyncWorker();
 
+	AsyncWorker& operator=(const AsyncWorker& other) = delete;
+	AsyncWorker(const AsyncWorker& other) = delete;
+
 protected:
-	AsyncWorker(std::size_t threadCount = std::thread::hardware_concurrency());
+	AsyncWorker(std::size_t threadCount = std::thread::hardware_concurrency() - 1);
 
 private:
-	std::size_t m_threadCount;
+	static void threadFunction();
+	static void notifyOne();
+	static const std::shared_ptr<TaskStore>& taskStore();
+	static std::mutex& wakeUpMutex();
+
+private:
+	static bool s_threadsShouldStop;
+	static std::atomic<std::size_t> s_threadsNotified;
+
+	static std::condition_variable s_wakeUpCondition;
+	static std::mutex s_wakeUpMutex;
+
+	static std::shared_ptr<TaskStore> s_taskStore;
+	std::vector<std::thread> m_threads;
 };
+
+template<typename FunctionType, typename CallbackType, typename... Args>
+typename std::enable_if_t<std::is_invocable_v<FunctionType, Args&&...>>
+AsyncWorker::execute(FunctionType&& function, Args&&... args)
+{
+	taskStore()->pushTask(
+		[_function = std::forward<FunctionType>(function),
+		_args = std::make_tuple(args...)]()
+	{
+		std::apply(_function, _args);
+	});
+
+	notifyOne();
+}
 
 template<typename FunctionType, typename CallbackType, typename... Args>
 typename std::enable_if_t<
@@ -28,15 +63,29 @@ typename std::enable_if_t<
 	(std::is_void_v<std::invoke_result_t<FunctionType, Args&&...>> && std::is_invocable_v<CallbackType>
 		|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args&&...>>)
 >
-	AsyncWorker::execute(FunctionType&& function, CallbackType&& callback, Args&&... args)
+	AsyncWorker::executeWithCallback(FunctionType&& function, CallbackType&& callback, Args&&... args)
 {
-	if constexpr (std::is_void_v<std::invoke_result_t<FunctionType, Args&&...>>)
+	if constexpr (std::is_void_v<std::invoke_result_t<FunctionType, Args...>>)
 	{
-		std::forward<FunctionType>(function)(std::forward<Args>(args)...);
-		std::forward<CallbackType>(callback)();
+		taskStore()->pushTask(
+			[_function = std::forward<FunctionType>(function),
+			 _callback = std::forward<CallbackType>(callback),
+			 _args = std::make_tuple(args...)]()
+			{
+				std::apply(_function, _args);
+				_callback();
+			});
 	}
 	else
 	{
-		std::forward<CallbackType>(callback)(std::forward<FunctionType>(function)(std::forward<Args>(args)...));
+		taskStore()->pushTask(
+			[_function = std::forward<FunctionType>(function),
+			_callback = std::forward<CallbackType>(callback),
+			_args = std::make_tuple(args...)]()
+		{
+			std::invoke(_callback, std::apply(_function, _args));
+		});
 	}
+
+	notifyOne();
 }
