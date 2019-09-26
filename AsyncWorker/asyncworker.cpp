@@ -1,76 +1,65 @@
 #include "asyncworker.h"
 
-bool AsyncWorker::s_threadsShouldStop = false;
-std::atomic<std::size_t> AsyncWorker::s_threadsNotified = 0;
-
-std::condition_variable AsyncWorker::s_wakeUpCondition;
-std::mutex AsyncWorker::s_wakeUpMutex;
-
-std::shared_ptr<TaskStore> AsyncWorker::s_taskStore = std::make_shared<TaskStore>();
-
 AsyncWorker::AsyncWorker(std::size_t threadCount)
+	: m_threadsShouldStop{ false }
+	, m_threadsNotified{ 0 }
+	, m_wakeUpCondition{}
+	, m_wakeUpMutex{}
+	, m_taskStore{ std::make_shared<TaskStore>() }
 {
 	for (std::size_t i = 0; i < threadCount; ++i)
 	{
-		m_threads.emplace_back(AsyncWorker::threadFunction);
+		m_threads.emplace_back(
+			[this]()
+			{
+				while (true)
+				{
+					std::unique_lock<std::mutex> lock(m_wakeUpMutex);
+					while (m_threadsNotified == 0) //to prevent spurious wakeups
+					{
+						m_wakeUpCondition.wait(lock);
+					}
+					--m_threadsNotified;
+
+					if (m_threadsShouldStop)
+					{
+						return;
+					}
+					lock.unlock();
+
+					m_taskStore->popTask()();
+				}
+			});
 	}
 }
 
-void AsyncWorker::threadFunction()
+AsyncWorker::~AsyncWorker()
 {
-	while (true)
-	{
-		std::unique_lock<std::mutex> lock(s_wakeUpMutex);
-		while (s_threadsNotified == 0) //to prevent spurious wakeups
-		{
-			s_wakeUpCondition.wait(lock);
-		}
-		--s_threadsNotified;
-		lock.unlock();
+	m_taskStore->clear(); //remove all unstarted tasks
 
-		if (s_threadsShouldStop)
-		{
-			return;
-		}
-		s_taskStore->popTask()();
+	m_threadsShouldStop = true;
+	m_threadsNotified = m_threads.size();
+	m_wakeUpCondition.notify_all();
+
+	for (auto& thread : m_threads)
+	{
+		thread.join();
 	}
 }
 
 void AsyncWorker::notifyOne()
 {
 	std::unique_lock<std::mutex> lock(wakeUpMutex());
-	++s_threadsNotified;
-	s_wakeUpCondition.notify_one();
+	++m_threadsNotified;
+	m_wakeUpCondition.notify_one();
 }
 
 const std::shared_ptr<TaskStore>& AsyncWorker::taskStore()
 {
-	return s_taskStore;
+	return m_taskStore;
 }
 
 std::mutex& AsyncWorker::wakeUpMutex()
 {
-	return s_wakeUpMutex;
-}
-
-AsyncWorker& AsyncWorker::instance()
-{
-	static AsyncWorker worker;
-	return (worker);
-}
-
-AsyncWorker::~AsyncWorker()
-{
-	std::unique_lock<std::mutex> lock(wakeUpMutex());
-	s_taskStore->clear(); //remove all unstarted tasks
-
-	s_threadsShouldStop = true;
-	s_threadsNotified = m_threads.size();
-	s_wakeUpCondition.notify_one();
-
-	for (auto& thread : m_threads)
-	{
-		thread.join();
-	}
-	system("pause");
+	return m_wakeUpMutex;
 }

@@ -1,5 +1,7 @@
 #include <asyncworker.h>
 
+AsyncWorker worker;
+
 std::atomic<int> counter1 = 0;
 const int timeout = 5;
 
@@ -20,7 +22,7 @@ TEST(TestSyntax, SimpleFunctions)
 
 	for (int i = 0; i < N; ++i)
 	{
-		AsyncWorker::instance().executeWithCallback(f, g, 2*i+1, 2*i+2);
+		worker.executeWithCallback(f, g, 2*i+1, 2*i+2);
 	}
 	std::this_thread::sleep_for(std::chrono::seconds(timeout * static_cast<int>(std::ceil(N/3.0)) + 1));
 	EXPECT_EQ(counter1, N);
@@ -52,8 +54,8 @@ TEST(TestSyntax, ClassMembersAndLambdas)
 	const A a;
 
 	double ddd = 10;
-	AsyncWorker::instance().executeWithCallback([&a](int _a, double& _b) { a.f(_a, _b); }, B::g, 9, std::ref(ddd));
-	AsyncWorker::instance().executeWithCallback([&a](int _a, double& _b) { a.f(_a, _b); }, B::g, 11, std::ref(ddd));
+	worker.executeWithCallback([&a](int _a, double& _b) { a.f(_a, _b); }, B::g, 9, std::ref(ddd));
+	worker.executeWithCallback([&a](int _a, double& _b) { a.f(_a, _b); }, B::g, 11, std::ref(ddd));
 	std::this_thread::sleep_for(std::chrono::seconds(timeout + 1));
 	EXPECT_EQ(counter2, 2);
 	EXPECT_EQ(ddd, 12);
@@ -74,7 +76,7 @@ void gArg(std::tuple<int, double, char> res)
 TEST(TestSyntax, CallbacksWithArgs)
 {
 	char c = 'X';
-	AsyncWorker::instance().executeWithCallback(fArg, gArg, 2, 4, &c);
+	worker.executeWithCallback(fArg, gArg, 2, 4, &c);
 	std::this_thread::sleep_for(std::chrono::seconds(1));
 	EXPECT_TRUE(true);
 }

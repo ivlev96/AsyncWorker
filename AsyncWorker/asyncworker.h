@@ -4,47 +4,45 @@
 class __declspec(dllexport) AsyncWorker
 {
 public:
-	static AsyncWorker& instance();
+	AsyncWorker(std::size_t threadCount = std::thread::hardware_concurrency() - 1);
+	virtual ~AsyncWorker();
+
+	AsyncWorker(const AsyncWorker& other) = delete;
+	AsyncWorker(AsyncWorker&& other) = delete;
+
+	AsyncWorker& operator=(const AsyncWorker& other) = delete;
+	AsyncWorker& operator=(AsyncWorker&& other) = delete;
 
 	template<typename FunctionType, typename CallbackType, typename... Args>
-	typename std::enable_if_t<std::is_invocable_v<FunctionType, Args&&...>>
+	typename std::enable_if_t<std::is_invocable_v<FunctionType, Args...>>
 		execute(FunctionType&& function, Args&&... args);
 
 	template<typename FunctionType, typename CallbackType, typename... Args>
 	typename std::enable_if_t<
-		std::is_invocable_v<FunctionType, Args&&...> &&
-		(std::is_void_v<std::invoke_result_t<FunctionType, Args&&...>> && std::is_invocable_v<CallbackType>
-			|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args&&...>>)
+		std::is_invocable_v<FunctionType, Args...> &&
+		(std::is_void_v<std::invoke_result_t<FunctionType, Args...>> && std::is_invocable_v<CallbackType>
+			|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args...>>)
 	>
 		executeWithCallback(FunctionType&& function, CallbackType&& callback, Args&&... args);
 
-	virtual ~AsyncWorker();
-
-	AsyncWorker& operator=(const AsyncWorker& other) = delete;
-	AsyncWorker(const AsyncWorker& other) = delete;
-
-protected:
-	AsyncWorker(std::size_t threadCount = std::thread::hardware_concurrency() - 1);
+private:
+	void notifyOne();
+	const std::shared_ptr<TaskStore>& taskStore();
+	std::mutex& wakeUpMutex();
 
 private:
-	static void threadFunction();
-	static void notifyOne();
-	static const std::shared_ptr<TaskStore>& taskStore();
-	static std::mutex& wakeUpMutex();
+	bool m_threadsShouldStop;
+	std::atomic<std::size_t> m_threadsNotified;
 
-private:
-	static bool s_threadsShouldStop;
-	static std::atomic<std::size_t> s_threadsNotified;
+	std::condition_variable m_wakeUpCondition;
+	std::mutex m_wakeUpMutex;
 
-	static std::condition_variable s_wakeUpCondition;
-	static std::mutex s_wakeUpMutex;
-
-	static std::shared_ptr<TaskStore> s_taskStore;
+	std::shared_ptr<TaskStore> m_taskStore;
 	std::vector<std::thread> m_threads;
 };
 
 template<typename FunctionType, typename CallbackType, typename... Args>
-typename std::enable_if_t<std::is_invocable_v<FunctionType, Args&&...>>
+typename std::enable_if_t<std::is_invocable_v<FunctionType, Args...>>
 AsyncWorker::execute(FunctionType&& function, Args&&... args)
 {
 	taskStore()->pushTask(
@@ -59,9 +57,9 @@ AsyncWorker::execute(FunctionType&& function, Args&&... args)
 
 template<typename FunctionType, typename CallbackType, typename... Args>
 typename std::enable_if_t<
-	std::is_invocable_v<FunctionType, Args&&...> &&
-	(std::is_void_v<std::invoke_result_t<FunctionType, Args&&...>> && std::is_invocable_v<CallbackType>
-		|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args&&...>>)
+	std::is_invocable_v<FunctionType, Args...> &&
+	(std::is_void_v<std::invoke_result_t<FunctionType, Args...>> && std::is_invocable_v<CallbackType>
+		|| std::is_invocable_v<CallbackType, std::invoke_result_t<FunctionType, Args...>>)
 >
 	AsyncWorker::executeWithCallback(FunctionType&& function, CallbackType&& callback, Args&&... args)
 {
